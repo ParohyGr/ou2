@@ -22,13 +22,6 @@ internal class CardsRepositoryImpl @Inject internal constructor(
 
   private val cardsMap: Map<String, ScratchCard> get() = (_data.value.cards.valueOrNull ?: emptyMap())
 
-  init {
-    coroutineScope.launch {
-      val cards = db.loadCards().takeIf(Collection<*>::isNotEmpty)?.associateBy(ScratchCard::code)?.let(::Content)
-      _data.emit(_data.value.copy(cards = cards))
-    }
-  }
-
   override suspend fun loadCards() {
     if (_data.value.cards.isLoading) return
 

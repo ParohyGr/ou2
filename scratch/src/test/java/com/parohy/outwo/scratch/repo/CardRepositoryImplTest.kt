@@ -16,6 +16,7 @@ import org.junit.*
 import org.junit.Assert.*
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
+import org.mockito.kotlin.whenever
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
@@ -64,48 +65,35 @@ class CardRepositoryTest {
 
   @Test
   fun `when loadCards, state should update`() = runTest {
-    val results = mutableListOf<CardRepositoryState>()
-    val job = launch {
-      cardsRepository.getData().toList(results)
-    }
+    whenever(db.loadCards()).thenReturn(emptyList())
 
     cardsRepository.loadCards()
-    advanceUntilIdle()
-
-    job.cancel()
-
-    assertTrue(results.last().cards.isContent)
+    cardsRepository.getData().test {
+      val i = awaitItem()
+      assertTrue(i.cards.isContent)
+    }
   }
 
   @Test
   fun `when generateCard, state should update`() = runTest {
-    val results = mutableListOf<CardRepositoryState>()
-    val job = launch {
-      cardsRepository.getData().toList(results)
-    }
-
     cardsRepository.generateCard()
-    advanceUntilIdle()
-
-    job.cancel()
-
-    assertTrue(results.last().cards.isContent)
+    cardsRepository.getData().test {
+      val i = awaitItem()
+      assertTrue(i.cards.isContent)
+      assertEquals(1, i.cards.valueOrNull?.size)
+    }
   }
 
   @Test
   fun `when scratchCard, state should update`() = runTest {
-    val results = mutableListOf<CardRepositoryState>()
-    val job = launch {
-      cardsRepository.getData().toList(results)
-    }
-
     cardsRepository.generateCard()
-    cardsRepository.scratchCard(cardsRepository.getData().first().cards.valueOrNull?.keys?.first() ?: "123")
-    advanceUntilIdle()
-
-    job.cancel()
-
-    assertTrue("Expected scratched card but ${results.last().cards.valueOrNull?.values?.lastOrNull()?.isScratched}", results.last().cards.valueOrNull?.values?.lastOrNull()?.isScratched ?: false)
+    cardsRepository.getData().test {
+      val i1 = awaitItem()
+      assertTrue("Card should not be scratched", i1.cards.valueOrNull?.values?.first()?.isScratched == false)
+      cardsRepository.scratchCard(cardsRepository.getData().first().cards.valueOrNull?.keys?.first()!!)
+      val i2 = awaitItem()
+      assertTrue("Card should be scratched", i2.cards.valueOrNull?.values?.first()?.isScratched == true)
+    }
   }
 
   @Test(expected = IllegalArgumentException::class)
@@ -115,18 +103,14 @@ class CardRepositoryTest {
 
   @Test
   fun `when removeCard, state should update`() = runTest {
-    val results = mutableListOf<CardRepositoryState>()
-    val job = launch {
-      cardsRepository.getData().toList(results)
-    }
-
     cardsRepository.generateCard()
-    cardsRepository.removeCard(cardsRepository.getData().first().cards.valueOrNull?.keys?.first() ?: "123")
-    advanceUntilIdle()
-
-    job.cancel()
-
-    assertTrue("Expected empty cards but ${results.last().cards.valueOrNull?.values}", results.last().cards.valueOrNull?.values?.isEmpty() ?: false)
+    cardsRepository.getData().test {
+      val i1 = awaitItem()
+      assertEquals(1, i1.cards.valueOrNull?.size)
+      cardsRepository.removeCard(cardsRepository.getData().first().cards.valueOrNull?.keys?.first()!!)
+      val i2 = awaitItem()
+      assertEquals(0, i2.cards.valueOrNull?.size)
+    }
   }
 
   @Test(expected = IllegalArgumentException::class)
@@ -171,6 +155,25 @@ class CardRepositoryTest {
       assertTrue(i2.activation.isLoading)
       val i3 = awaitItem()
       assertTrue("Expected Failure but have ${i3.activation.valueOrNull}", i3.activation.isFailure)
+    }
+  }
+
+  @Test
+  fun `given stored cards, when repository init, then state should contain cards`() = runTest {
+    val cards = listOf(
+      ScratchCard("CARD1", false, true),
+      ScratchCard("CARD2", true, true)
+    )
+
+    whenever(db.loadCards()).thenReturn(cards)
+
+    cardsRepository = CardsRepositoryImpl(db, apiService, TestScope(dispatcher))
+
+    cardsRepository.loadCards()
+    cardsRepository.getData().test {
+      val i1 = awaitItem().cards.valueOrNull
+      assertNotNull(i1)
+      assertEquals(cards.size, i1?.size)
     }
   }
 }

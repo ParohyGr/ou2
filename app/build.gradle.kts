@@ -45,9 +45,6 @@ android {
       excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
   }
-  tasks.withType<Test> {
-    useJUnitPlatform()
-  }
 }
 
 dependencies {
@@ -68,4 +65,10 @@ dependencies {
   implementation(libs.androidx.hilt.lifecycle.viewmodel)
   implementation(libs.hilt.android.navigation)
   ksp(libs.hilt.android.compiler)
+
+  testImplementation(libs.androidx.core.testing)
+  testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation(libs.mockk)
+  testImplementation(libs.turbine)
+  testImplementation(libs.mockito.kotlin)
 }

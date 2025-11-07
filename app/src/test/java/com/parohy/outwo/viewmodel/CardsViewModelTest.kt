@@ -3,129 +3,124 @@ package com.parohy.outwo.viewmodel
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
-import com.parohy.outwo.core.*
-import com.parohy.outwo.repository.*
+import com.parohy.outwo.scratch.core.*
+import com.parohy.outwo.scratch.repo.*
 import com.parohy.outwo.ui.cards.CardsViewModel
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
+import io.mockk.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
-import org.junit.Rule
-import org.junit.jupiter.api.*
-import org.junit.rules.TestRule
-import org.mockito.*
-import kotlin.test.*
+import org.junit.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CardsViewModelTest {
-  @Mock
-  private lateinit var db: CardPreferences
-  private lateinit var cardsRepository: CardsRepository
-  
+
+  private val testDispatcher = StandardTestDispatcher()
+  private val testScope = TestScope(testDispatcher)
+
   @get:Rule
-  val rule: TestRule = InstantTaskExecutorRule()
+  val instantTaskExecutorRule = InstantTaskExecutorRule()
 
-  @BeforeEach
+  private lateinit var cardsRepository: CardsRepository
+  private lateinit var savedStateHandle: SavedStateHandle
+  private lateinit var viewModel: CardsViewModel
+
+  private val repoDataFlow = MutableStateFlow(CardRepositoryState(cards = Content(emptyMap())))
+
+  @Before
   fun setup() {
-    MockitoAnnotations.initMocks(this)
-    cardsRepository = CardsRepositoryImpl(db)
+    Dispatchers.setMain(testDispatcher)
+
+    cardsRepository = mockk(relaxed = true)
+    every { cardsRepository.getData() } returns repoDataFlow
+
+    savedStateHandle = mockk(relaxed = true)
+    every { savedStateHandle.get<String>("cards") } returns null
+
+    viewModel = CardsViewModel(savedStateHandle, cardsRepository, testScope)
+  }
+
+  @After
+  fun tearDown() {
+    Dispatchers.resetMain()
   }
 
   @Test
-  fun `initial state`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
+  fun `init block should observe repository data and update uiState`() = runTest {
+    val card1 = ScratchCard("123", true, false)
+    val card2 = ScratchCard("456", false, true)
+    val repoCards = mapOf("123" to card1, "456" to card2)
 
-    assertTrue(viewModel.uiState.value.cards == null)
-    assertTrue(viewModel.uiState.value.generate == null)
-  }
-
-  @Test
-  fun `when loadCards, state should update`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
-
-    launch {
-      viewModel.uiState.test {
-        assertEquals(null, awaitItem().cards)
-        assertEquals(Loading, awaitItem().cards)
-        assertEquals(Content(emptyList()), awaitItem().cards)
-      }
+    viewModel.uiState.test {
+      val i = awaitItem()
+      assertTrue(i.cards is Content)
+      repoDataFlow.emit(CardRepositoryState(cards = Content(repoCards)))
+      val expectedContent = listOf(card1, card2)
+      val updatedState = awaitItem()
+      assertTrue("Cards state should be Content but was ${updatedState.cards}", updatedState.cards is Content)
+      val actualCards = (updatedState.cards as Content).value
+      assertEquals(expectedContent, actualCards)
     }
 
-    viewModel.loadCards()
-    advanceUntilIdle()
+    val expectedSavedString = "123;true;false-456;false;true"
+    coVerify { savedStateHandle["cards"] = expectedSavedString }
   }
 
+
   @Test
-  fun `when cards loading, Error should be delivered`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
+  fun `generateCard should emit Loading then Content`() = runTest {
+    coEvery { cardsRepository.generateCard() } returns Unit
 
-    Mockito.`when`(db.loadCards()).thenThrow(RuntimeException("Failed to load cards"))
-
-    launch {
-      viewModel.uiState.test {
-        assertEquals(null, awaitItem().cards)
-        assertEquals(Loading, awaitItem().cards)
-        assertEquals(Failure(RuntimeException("Failed to load cards")).toString(), awaitItem().cards.toString())
-      }
+    viewModel.uiState.test {
+      awaitItem() // initial
+      viewModel.generateCard()
+      val loadingState = awaitItem()
+      assertTrue("Generate state should be Loading but was ${loadingState.generate}", loadingState.generate is Loading)
+      val successState = awaitItem()
+      assertTrue("Generate state should be Content but was ${successState.generate}", successState.generate is Content)
+      coVerify(exactly = 1) { cardsRepository.generateCard() }
     }
-
-    viewModel.loadCards()
-    advanceUntilIdle()
   }
 
   @Test
-  fun `when generate card, card generation should be Content`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
+  fun `generateCard should emit Loading then Failure on exception`() = runTest {
+    val testException = RuntimeException("Network Error")
+    coEvery { cardsRepository.generateCard() } throws testException
 
-    launch {
-      viewModel.uiState.map { it.generate }.distinctUntilChanged().test {
-        assertEquals(null, awaitItem())
-        assertEquals(Loading, awaitItem())
-        assertEquals(Content(Unit), awaitItem())
-      }
+    viewModel.uiState.test {
+      awaitItem() // initial
+      viewModel.generateCard()
+      val loadingState = awaitItem()
+      assertTrue("Generate state should be Loading but was ${loadingState.generate}", loadingState.generate is Loading)
+      val failureState = awaitItem()
+      assertTrue("Generate state should be Failure but was ${failureState.generate}", failureState.generate is Failure<*>)
+      val failure = failureState.generate as Failure<Throwable>
+      assertTrue(
+        "Wrapped exception message should contain the original message",
+        (failure.value as RuntimeException).cause == testException
+      )
+
+      coVerify(exactly = 1) { cardsRepository.generateCard() }
     }
-
-    viewModel.generateCard()
-    advanceUntilIdle()
   }
 
   @Test
-  fun `when generate card, card generation be exactly one card`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
+  fun `clearGenerateState should reset generate state to null`() = runTest {
+    coEvery { cardsRepository.generateCard() } returns Unit
+    viewModel.uiState.test {
+      awaitItem() // Initial
+      viewModel.generateCard()
+      val loadingState = awaitItem()
+      assertTrue("Generate state should be Loading but was ${loadingState.generate}", loadingState.generate is Loading)
+      val successState = awaitItem()
+      assertTrue(successState.generate is Content)
 
-    launch {
-      viewModel.uiState.map { it.cards }.distinctUntilChanged().test {
-        assertEquals(null, awaitItem())
-        assertEquals(1, awaitItem().valueOrNull?.size)
-      }
+      viewModel.clearGenerateState()
+      val clearedState = awaitItem()
+      assertEquals(null, clearedState.generate)
     }
-
-    viewModel.generateCard()
-    advanceUntilIdle()
-  }
-
-  @Test
-  fun `when generate card is successful, cards should update`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
-
-    launch {
-      viewModel.uiState.map { it.cards }.distinctUntilChanged().test {
-        assertEquals(null, awaitItem())
-        assertNotEquals(null, awaitItem().valueOrNull)
-      }
-    }
-
-    viewModel.generateCard()
-    advanceUntilIdle()
-  }
-
-  @Test
-  fun `given generate state Content, when clearGenerateState, generate state should be null`() = runTest {
-    val viewModel = CardsViewModel(SavedStateHandle(), cardsRepository, backgroundScope)
-
-    viewModel.generateCard()
-    advanceUntilIdle()
-
-    viewModel.clearGenerateState()
-
-    assertTrue(viewModel.uiState.value.generate == null, "Expected null but have ${viewModel.uiState.value.generate}")
   }
 }

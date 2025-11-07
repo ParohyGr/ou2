@@ -6,9 +6,10 @@ import com.parohy.outwo.scratch.core.*
 import com.parohy.outwo.scratch.repo.CardsRepository
 import com.parohy.outwo.scratch.repo.ScratchCard
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 
@@ -34,7 +35,7 @@ class CardsViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(cards = cards)
         cards.ifContent { value ->
           savedState["cards"] =
-            value.joinToString(separator = "-") { "${it.code};${it.isScratched};${isActive}" }
+            value.joinToString(separator = "-") { "${it.code};${it.isScratched};${it.isActivated}" }
         }
       }
     }
@@ -56,7 +57,6 @@ class CardsViewModel @Inject constructor(
         e.printStackTrace()
         _uiState.value.copy(generate = Failure(RuntimeException("Failed to generate card", e)))
       }
-      _uiState.value = _uiState.value.copy(generate = SUCCESS)
     }
   }
 

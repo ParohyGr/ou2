@@ -8,6 +8,6 @@ import com.parohy.outwo.scratch.repo.ScratchCard
   entities = [ScratchCard::class],
   version = 1
 )
-abstract class Database: RoomDatabase() {
+internal abstract class Database: RoomDatabase() {
   abstract fun cardsDao(): CardsDao
 }

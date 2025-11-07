@@ -40,7 +40,6 @@ dependencies {
   implementation(libs.converter.gson)
 
   implementation(libs.hilt.android)
-  testImplementation(libs.turbine)
   ksp(libs.hilt.android.compiler)
 
   implementation(libs.androidx.room.ktx)
@@ -51,4 +50,6 @@ dependencies {
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.mockk)
+  testImplementation(libs.turbine)
+  testImplementation(libs.mockito.kotlin)
 }

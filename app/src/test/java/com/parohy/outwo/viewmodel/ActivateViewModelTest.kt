@@ -3,124 +3,108 @@ package com.parohy.outwo.viewmodel
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
-import com.parohy.outwo.core.*
-import com.parohy.outwo.repository.*
+import com.parohy.outwo.scratch.core.Content
+import com.parohy.outwo.scratch.core.Failure
+import com.parohy.outwo.scratch.repo.*
+import com.parohy.outwo.ui.NAV_ARG_CARD_CODE
 import com.parohy.outwo.ui.activate.ActivateViewModel
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
+import io.mockk.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import org.junit.Rule
-import org.junit.jupiter.api.*
-import org.junit.rules.TestRule
-import org.mockito.Mock
-import org.mockito.MockitoAnnotations
-import kotlin.test.*
+import org.junit.*
+import org.junit.Assert.assertTrue
 
-private const val SUCCESS_CODE = 280000
-private const val FAILURE_CODE = 270000
-
+@OptIn(ExperimentalCoroutinesApi::class)
 class ActivateViewModelTest {
-  @Mock
-  private lateinit var db: CardPreferences
-  private lateinit var cardsRepository: CardsRepository
 
-  private lateinit var viewModel: ActivateViewModel
+  private val testDispatcher = StandardTestDispatcher()
+  private val testScope = TestScope(testDispatcher)
 
   @get:Rule
-  val rule: TestRule = InstantTaskExecutorRule()
-  private val dispatcher = StandardTestDispatcher()
+  val instantTaskExecutorRule = InstantTaskExecutorRule()
 
-  private lateinit var mockWebServer: MockWebServer
+  private lateinit var cardsRepository: CardsRepository
+  private lateinit var savedStateHandle: SavedStateHandle
+  private lateinit var viewModel: ActivateViewModel
 
-  @BeforeEach
+  private val testCardCode = "1234"
+  private val mockCard = ScratchCard(testCardCode, isScratched = true, isActivated = false)
+  private val mockCardMap = mapOf(testCardCode to mockCard)
+
+  private val repoDataFlow = MutableStateFlow(CardRepositoryState(cards = Content(mockCardMap)))
+
+  @Before
   fun setup() {
-    MockitoAnnotations.initMocks(this)
+    Dispatchers.setMain(testDispatcher)
 
-    mockWebServer = MockWebServer()
-    mockWebServer.start()
+    cardsRepository = mockk(relaxed = true)
+    every { cardsRepository.getData() } returns repoDataFlow
 
-    cardsRepository = CardsRepositoryImpl(db, mockWebServer.url("/").toString())
+    savedStateHandle = mockk(relaxed = true)
+    every { savedStateHandle.get<String>(NAV_ARG_CARD_CODE) } returns testCardCode
+    every { savedStateHandle.get<String>("card") } returns null
+
+    repoDataFlow.value = repoDataFlow.value.copy(cards = Content(mockCardMap))
+
+    viewModel = ActivateViewModel(savedStateHandle, cardsRepository, testScope)
   }
 
-  @AfterEach
-  fun teardown() {
-    mockWebServer.shutdown()
-  }
-
-  @Test
-  fun `given correct cardCode, when viewmodel is initialized, it should contain card which is not activated and is scratched`() = runTest {
-    cardsRepository.generateCard()
-
-    val cardCode = cardsRepository.getData().first().cards?.valueOrNull?.keys?.firstOrNull()
-    assertTrue(cardCode != null, "Card code should not be null") //jupiter assertTrue nerobi contract, amazed
-
-    viewModel = ActivateViewModel(SavedStateHandle(), cardCode, cardsRepository, backgroundScope)
-
-    launch {
-      viewModel.uiState.map { it.card }.test {
-        assertEquals(null, awaitItem())
-        assertFalse(awaitItem().valueOrNull?.isScratched ?: true, "Expected card isScratched=false")
-        val item = awaitItem().valueOrNull
-        assertTrue(item?.isScratched ?: false, "Expected card isScratched=true")
-        assertFalse(item?.isActivated ?: true, "Expected card isActivated=false")
-      }
-    }
-
-    cardsRepository.scratchCard(cardCode)
-    advanceUntilIdle()
+  @After
+  fun tearDown() {
+    Dispatchers.resetMain()
   }
 
   @Test
-  fun `given correct cardCode, when activate called, card should update and have Content`() = runTest {
-    val response = MockResponse().setResponseCode(200).setBody("{ \"android\": \"$SUCCESS_CODE\" }")
-    mockWebServer.enqueue(response)
-
-    cardsRepository = CardsRepositoryImpl(db, mockWebServer.url("/").toString(), backgroundScope)
-    cardsRepository.generateCard()
-
-    val cardCode = cardsRepository.getData().first().cards?.valueOrNull?.keys?.firstOrNull()
-    assertTrue(cardCode != null, "Card code should not be null") //jupiter assertTrue nerobi contract, amazed
-
-    viewModel = ActivateViewModel(SavedStateHandle(), cardCode, cardsRepository, backgroundScope)
-
-    launch {
-      viewModel.uiState.map { it.card }.distinctUntilChanged().test {
-        assertEquals(null, awaitItem())
-        val item = awaitItem()
-        assertTrue(item.isContent, "Expected Content but have $item")
-        assertTrue(item.valueOrNull?.isActivated ?: false, "Expected card isActivated=true")
-      }
+  fun `when activate card is called, and activation succeeds, uiState activate should contain Content state`() = runTest {
+    every { cardsRepository.activateCard(any()) } answers {
+      repoDataFlow.value = repoDataFlow.value.copy(activation = Content(Unit))
     }
 
+    viewModel.uiState.test {
+      awaitItem() // initial
+      val updated = awaitItem()
+      assertTrue("Card should be Content but was ${updated.card}", updated.card is Content)
+
+      viewModel.activateCard()
+      val activateState = awaitItem()
+
+      assertTrue("Card should be Content but was ${activateState.card}", activateState.card is Content)
+      assertTrue("Activation should be Content but was ${activateState.activate}", activateState.activate is Content)
+    }
+  }
+
+  @Test
+  fun `when activate card is called, and activation fails, uiState activate should contain Failure state`() = runTest {
+    every { cardsRepository.activateCard(any()) } answers {
+      repoDataFlow.value = repoDataFlow.value.copy(activation = Failure(RuntimeException("Network Error")))
+    }
+
+    viewModel.uiState.test {
+      awaitItem() // initial
+      val updated = awaitItem()
+      assertTrue("Card should be Content but was ${updated.card}", updated.card is Content)
+
+      viewModel.activateCard()
+      val activateState = awaitItem()
+
+      assertTrue("Card should be Content but was ${activateState.card}", activateState.card is Content)
+      assertTrue("Activation should be Content but was ${activateState.activate}", activateState.activate is Failure)
+    }
+  }
+
+  @Test
+  fun `activateCard should call repository's activateCard`() = runTest {
     viewModel.activateCard()
-    advanceUntilIdle()
+
+    verify(exactly = 1) { cardsRepository.activateCard(testCardCode) }
   }
 
   @Test
-  fun `given correct cardCode, when activate called, card should update and have Failure`() = runTest {
-    val response = MockResponse().setResponseCode(200).setBody("{ \"android\": \"$FAILURE_CODE\" }")
-    mockWebServer.enqueue(response)
+  fun `clearActivationState should call repository's resetActivate`() = runTest {
+    viewModel.clearActivationState()
 
-    cardsRepository = CardsRepositoryImpl(db, mockWebServer.url("/").toString(), backgroundScope)
-    cardsRepository.generateCard()
-
-    val cardCode = cardsRepository.getData().first().cards?.valueOrNull?.keys?.firstOrNull()
-    assertTrue(cardCode != null, "Card code should not be null") //jupiter assertTrue nerobi contract, amazed
-
-    viewModel = ActivateViewModel(SavedStateHandle(), cardCode, cardsRepository, backgroundScope)
-
-    launch {
-      viewModel.uiState.map { it.activate }.distinctUntilChanged().test {
-        assertEquals(null, awaitItem())
-        val item = awaitItem()
-        assertTrue(item.isFailure, "Expected Failure but have $item")
-        assertEquals(Failure(IllegalStateException("Failed to activate card!")).toString(), item.toString())
-      }
-    }
-
-    viewModel.activateCard()
-    advanceUntilIdle()
+    verify(exactly = 1) { cardsRepository.resetActivate() }
   }
 }

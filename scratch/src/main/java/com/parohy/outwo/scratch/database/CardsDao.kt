@@ -8,7 +8,7 @@ import androidx.room.Query
 import com.parohy.outwo.scratch.repo.ScratchCard
 
 @Dao
-interface CardsDao {
+internal interface CardsDao {
   @Query("SELECT * FROM ScratchCard")
   suspend fun loadCards(): List<ScratchCard>
 
